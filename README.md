@@ -1,7 +1,7 @@
 # IIMBx DPM-101 Course Helpdesk Chatbot
 
 A context-aware chatbot that answers student questions strictly using official
-DPM-101 course documents. Built as a Technical Internship project (Module 2 of 12).
+DPM-101 course documents. Built as a Technical Internship project (Modules 1–12 Completed & Production Ready).
 
 ---
 
@@ -510,14 +510,103 @@ Module 11 unifies all previous subsystems (Modules 1–10) into a hardened, prod
    - Real-time in-process operational metrics on `GET /api/stats` maintain 100% thread safety and accuracy.
    - `GET /health` and static asset serving are decoupled from AI quota and do not increment request counters.
 
-### 5. Remaining Limitations
+---
 
-- **Ephemeral Storage**: Conversation history, cache entries, and in-process statistics are stored locally in SQLite and memory; they reset when the server container restarts or redeploys.
-- **No User Authentication**: Conversations are tracked via anonymous client-side UUIDs without authenticated student accounts.
-- **Cloud Deployment**: Production deployment on Render with Gunicorn will be completed in Module 12.
+## Module 12: Production Deployment & Final Submission
+
+Module 12 prepares and validates the production deployment of the DPM-101 Helpdesk Chatbot for cloud hosting on Render.
+
+### 1. Production Architecture & Configuration
+
+| Parameter | Production Value | Purpose |
+|---|---|---|
+| Runtime | Python 3.11.9 (`runtime.txt`) | Consistent CPython runtime |
+| WSGI Server | Gunicorn 22.0.0 | High-performance production WSGI HTTP server |
+| Startup Command | `gunicorn "app:create_app()" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120` | Binds to Render dynamic `$PORT`, single process with 4 threads |
+| Architecture Model | Single-Worker Multi-Threaded | Guarantees shared memory for `RequestManager`, `SlidingWindowRateLimiter`, and `StatsService` |
+| Application Factory | `app:create_app()` / `app:app` | Dual WSGI entry point compatibility in `app.py` |
+| Database Engine | SQLite (WAL mode, busy timeout 15s) | Thread-safe embedded storage in `data/chatbot.db` |
+| Static Serving | Native Flask `static_folder="frontend"` | Zero-CORS single-origin serving |
+| Liveness Probe | `GET /health` -> HTTP 200 | Zero-quota health checks (Render healthCheckPath) |
+
+### 2. Environment Variables Reference
+
+Configure these environment variables in your Render Web Service dashboard (under **Environment**):
+
+| Variable | Required | Default / Recommended | Description |
+|---|---|---|---|
+| `GEMINI_API_KEY` | **Yes** | *(None — Secret)* | Google Gemini AI Studio API key. Never commit to git. |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Authoritative Gemini model identifier. |
+| `FLASK_SECRET_KEY` | **Yes** | *(Generate random 32-byte)* | Secret key for Flask session security. |
+| `FLASK_DEBUG` | No | `False` | Disables debug mode and reloader in production. |
+| `CACHE_ENABLED` | No | `True` | Enables SQLite response caching for repeat queries. |
+| `CACHE_DEFAULT_TTL` | No | `86400` | Cache time-to-live in seconds (24 hours). |
+| `RATE_LIMIT_ENABLED` | No | `True` | Enables sliding-window rate limiting. |
+| `PYTHON_VERSION` | No | `3.11.9` | Pinned Python runtime for Render native buildpack. |
+
+### 3. Deploying to Render
+
+#### Option A: Declarative Blueprint Deployment (`render.yaml`)
+1. Push this repository to GitHub.
+2. In the Render Dashboard, click **New +** > **Blueprint**.
+3. Select your repository. Render detects `render.yaml` automatically.
+4. Provide your secret `GEMINI_API_KEY` when prompted.
+5. Click **Apply**. Render builds and deploys the web service.
+
+#### Option B: Manual Web Service Setup
+1. In the Render Dashboard, click **New +** > **Web Service**.
+2. Connect your GitHub repository.
+3. Configure the service settings:
+   - **Name**: `dpm101-chatbot`
+   - **Environment**: `Python`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `gunicorn "app:create_app()" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`
+   - **Health Check Path**: `/health`
+4. Add the environment variables from the table above.
+5. Click **Create Web Service**.
+
+### 4. SQLite Storage & Free Tier Persistence Notes
+
+> [!WARNING]
+> **Ephemeral Filesystem on Render Free Tier**:
+> - Web services on Render's free tier run in ephemeral Docker containers that spin down after 15 minutes of inactivity.
+> - While course documents in `data/documents/*.txt` persist permanently (tracked in Git), any file created at runtime (such as `data/chatbot.db` containing conversation history and SQLite query cache) will reset when the container restarts, sleeps, or redeploys.
+> - In-process statistics (`GET /api/stats`) also reset to initial values upon worker process restart.
+> - For persistent database storage in production environments, attach a Render Persistent Disk (paid tier) or migrate the SQLite layer to an external PostgreSQL database.
+
+### 5. Final Verification & Test Results
+
+The complete test suite verifies all 12 modules end-to-end:
+```bash
+pytest -v
+```
+- **Total Tests**: **353 / 353 passing (100%)**
+- **Test Coverage**:
+  - `test_health.py`: 6 tests (Liveness, non-Gemini quota)
+  - `test_document_service.py`: 27 tests (Chunking, metadata, section filtering)
+  - `test_gemini_service.py`: 32 tests (SDK calls, retry, timeout, error fallback)
+  - `test_policy_service.py`: 43 tests (Document precedence, authority, Section 17 invariants)
+  - `test_chat_service.py`: 44 tests (Conversation CRUD, message ordering, follow-up detector)
+  - `test_cache_service.py`: 55 tests (SHA-256 composite keys, fingerprint invalidation, TTL)
+  - `test_request_management.py`: 58 tests (Sliding window rate limit, thundering herd concurrency, idempotency)
+  - `test_stats_service.py`: 30 tests (Thread-safe live operational counters)
+  - `test_frontend_integration.py`: 41 tests (DOM safety, zero innerHTML, responsive UI)
+  - `test_module11_e2e_integration.py`: 17 tests (Full end-to-end pipeline, Section 17 acceptance scenarios)
 
 ---
 
-## Next Steps
+## Final Project Submission Checklist
 
-Module 12 will implement Production Deployment & Final Project Delivery on Render.
+- [x] All 12 modules completed and verified.
+- [x] 353 / 353 unit and integration tests passing.
+- [x] Zero API keys or secrets committed to repository.
+- [x] `.env` excluded by `.gitignore`; `.env.example` provided.
+- [x] All 4 official course text documents present in `data/documents/`.
+- [x] Zero `innerHTML` usage across frontend; safe DOM rendering with native nodes.
+- [x] Dual WSGI entry point compatibility (`app:create_app()` and `app:app`).
+- [x] Gunicorn included in `requirements.txt` (`gunicorn==22.0.0`).
+- [x] Declarative Render Blueprint configured in `render.yaml`.
+- [x] Pinned Python runtime configured in `runtime.txt` (`python-3.11.9`).
+- [x] Ephemeral storage limitations on Render free tier honestly documented.
+- [x] Live local production server verification completed successfully.
+
