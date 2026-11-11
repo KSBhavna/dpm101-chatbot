@@ -18,7 +18,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from app import create_app
-from backend.services.chat_service import ChatService, init_db, get_db_connection, immediate_transaction
+from backend.services.chat_service import (
+    ChatService,
+    init_db,
+    get_db_connection,
+    immediate_transaction,
+    generate_conversation_title,
+)
+from backend.services.rate_limiter import SlidingWindowRateLimiter
 from backend.services.policy_service import PolicyService, PolicyAnswer
 from backend.services.gemini_service import GeminiService, GeminiResponse
 
@@ -63,7 +70,12 @@ def chat_service(temp_db_path, mock_policy_service):
 @pytest.fixture
 def client(chat_service):
     """Provides a Flask test client with the isolated ChatService injected."""
-    app = create_app({"TESTING": True, "chat_service": chat_service})
+    rate_limiter = SlidingWindowRateLimiter(default_ip_limit=500, default_ip_window=60)
+    app = create_app({
+        "TESTING": True,
+        "chat_service": chat_service,
+        "rate_limiter": rate_limiter,
+    })
     with app.test_client() as test_client:
         yield test_client
 
@@ -1140,3 +1152,172 @@ class TestAuditVerificationAndEdgeCases:
             assert cursor.fetchone()[0] == 0
         finally:
             conn.close()
+
+
+# ── Recent Conversations Title & Migration Test Suite ─────────────────────────
+
+class TestConversationTitlesAndMigration:
+    """Tests for conversation title generation, persistence, backfill, and schema migration."""
+
+    def test_generate_conversation_title_passing_requirements(self):
+        """Passing criteria questions map to 'Passing Requirements'."""
+        assert generate_conversation_title("What are the passing requirements?") == "Passing Requirements"
+        assert generate_conversation_title("What is the passing score for DPM-101?") == "Passing Requirements"
+        assert generate_conversation_title("How do I pass the course?") == "Passing Requirements"
+
+    def test_generate_conversation_title_final_exam(self):
+        """Final exam logistics and rules map accurately."""
+        assert generate_conversation_title("When is the final exam?") == "Final Exam Schedule"
+        assert generate_conversation_title("What is the final exam date?") == "Final Exam Schedule"
+        assert generate_conversation_title("What are the final exam rules?") == "Final Exam Rules"
+        assert generate_conversation_title("Can I use a calculator during the exam?") == "Exam Materials"
+
+    def test_generate_conversation_title_capstone_and_quizzes(self):
+        """Capstone and quiz questions generate readable titles."""
+        assert generate_conversation_title("What is the capstone deadline?") == "Capstone Deadline"
+        assert generate_conversation_title("Can I submit the capstone late?") == "Capstone Submission"
+        assert generate_conversation_title("When are the weekly quizzes due?") == "Quiz Deadlines"
+        assert generate_conversation_title("What is the certificate fee?") == "Certificate Fee"
+
+    def test_generate_conversation_title_fallbacks_and_empty(self):
+        """Empty, whitespace, and general questions handle gracefully."""
+        assert generate_conversation_title("") == "New Chat"
+        assert generate_conversation_title("   ") == "New Chat"
+        assert generate_conversation_title(None) == "New Chat"
+        assert generate_conversation_title("Hello") == "Hello"
+        assert generate_conversation_title("Tell me about product management") == "Product Management"
+
+    def test_empty_conversation_has_new_chat_title(self, chat_service):
+        """A brand new conversation starts with 'New Chat' title."""
+        conv = chat_service.create_conversation()
+        assert conv["title"] == "New Chat"
+
+        fetched = chat_service.get_conversation(conv["id"])
+        assert fetched["title"] == "New Chat"
+
+        listing = chat_service.list_conversations()
+        matching = [c for c in listing if c["id"] == conv["id"]]
+        assert len(matching) == 1
+        assert matching[0]["title"] == "New Chat"
+
+    def test_title_persisted_on_first_user_message(self, chat_service):
+        """First user message updates the title and subsequent messages preserve it."""
+        conv = chat_service.create_conversation()
+        assert conv["title"] == "New Chat"
+
+        # First message sets title
+        chat_service.save_user_message(conv["id"], "What are the passing requirements?")
+        updated = chat_service.get_conversation(conv["id"])
+        assert updated["title"] == "Passing Requirements"
+
+        # Second message preserves the established title
+        chat_service.save_user_message(conv["id"], "And what about distinction?")
+        after_second = chat_service.get_conversation(conv["id"])
+        assert after_second["title"] == "Passing Requirements"
+
+    def test_backfill_existing_conversations_without_title(self, temp_db_path):
+        """Existing conversations with NULL title are automatically backfilled from first message."""
+        init_db(temp_db_path)
+        chat = ChatService(db_path=temp_db_path)
+        conv = chat.create_conversation()
+
+        # Save user message
+        chat.save_user_message(conv["id"], "What is the capstone deadline?")
+
+        # Force title back to NULL directly in SQLite to simulate a legacy DB
+        conn = get_db_connection(temp_db_path)
+        try:
+            with immediate_transaction(conn):
+                conn.execute("UPDATE conversations SET title = NULL WHERE id = ?;", (conv["id"],))
+        finally:
+            conn.close()
+
+        # Calling list_conversations backfills the title
+        listing = chat.list_conversations()
+        conv_item = [c for c in listing if c["id"] == conv["id"]][0]
+        assert conv_item["title"] == "Capstone Deadline"
+
+        # Verify it was written back to the SQLite table
+        conn = get_db_connection(temp_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT title FROM conversations WHERE id = ?;", (conv["id"],))
+            assert cursor.fetchone()["title"] == "Capstone Deadline"
+        finally:
+            conn.close()
+
+    def test_database_migration_idempotent_and_handles_legacy_schema(self, tmp_path):
+        """init_db must migrate legacy schemas without title and be safely idempotent."""
+        db_file = str(tmp_path / "legacy_test.db")
+        conn = sqlite3.connect(db_file)
+        try:
+            # Create old schema explicitly without 'title'
+            conn.execute("""
+                CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    sources TEXT
+                );
+            """)
+            conn.execute(
+                "INSERT INTO conversations (id, created_at, updated_at, status) VALUES ('legacy-1', '2026-01-01', '2026-01-01', 'active');"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Run init_db on the legacy DB — must add 'title' column smoothly
+        init_db(db_file)
+
+        conn = sqlite3.connect(db_file)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(conversations);")
+            columns = [row["name"] for row in cursor.fetchall()]
+            assert "title" in columns
+
+            # Legacy row still intact
+            cursor.execute("SELECT id, status FROM conversations WHERE id = 'legacy-1';")
+            row = cursor.fetchone()
+            assert row["id"] == "legacy-1"
+        finally:
+            conn.close()
+
+        # Run init_db a second time — must be completely idempotent (no exception)
+        init_db(db_file)
+
+    def test_api_conversations_endpoint_includes_title(self, client):
+        """API endpoints return title and update it on message post."""
+        # 1. Create conversation via API
+        resp = client.post("/api/v1/conversations")
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["title"] == "New Chat"
+        conv_id = data["id"]
+
+        # 2. Post first message
+        post_resp = client.post(
+            f"/api/v1/conversations/{conv_id}/messages",
+            json={"message": "When is the final exam?"},
+        )
+        assert post_resp.status_code == 200
+
+        # 3. Fetch conversation listing — title must reflect first message
+        list_resp = client.get("/api/v1/conversations")
+        assert list_resp.status_code == 200
+        convs = list_resp.get_json()["conversations"]
+        target = [c for c in convs if c["id"] == conv_id][0]
+        assert target["title"] == "Final Exam Schedule"
+

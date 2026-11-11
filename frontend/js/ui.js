@@ -363,8 +363,9 @@
 
           var titleSpan = document.createElement('span');
           titleSpan.className = 'conversation-title';
-          // Use a friendly label: "Chat from <Date>" or short snippet
-          titleSpan.textContent = 'Chat ' + conv.id.slice(0, 8);
+          var displayTitle = (conv && conv.title) ? conv.title : (conv && conv.id ? ('Chat ' + conv.id.slice(0, 8)) : 'New Chat');
+          titleSpan.textContent = displayTitle;
+          titleSpan.setAttribute('title', displayTitle);
 
           var timeSpan = document.createElement('span');
           timeSpan.className = 'conversation-time';

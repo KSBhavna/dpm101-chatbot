@@ -74,6 +74,7 @@ def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
 def init_db(db_path: Optional[str] = None) -> None:
     """
     Initialize SQLite schema for conversations and messages if not already present.
+    Includes backward-compatible migration for the title column.
     """
     conn = get_db_connection(db_path)
     try:
@@ -81,11 +82,18 @@ def init_db(db_path: Optional[str] = None) -> None:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
+                    title TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active'
                 );
             """)
+
+            # Backward-compatible column migration for existing SQLite databases
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT;")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
@@ -114,6 +122,79 @@ def init_db(db_path: Optional[str] = None) -> None:
         logger.info("Chat database schema initialized successfully at %s", db_path or config.DB_PATH)
     finally:
         conn.close()
+
+
+# ── Title Generation Helper ───────────────────────────────────────────────────
+
+def generate_conversation_title(query: Optional[str]) -> str:
+    """
+    Generate a concise, readable, and meaningful conversation title based on the first user query.
+    Deterministic, offline, zero API quota consumption.
+    """
+    if not query or not isinstance(query, str):
+        return "New Chat"
+
+    q = query.strip()
+    if not q:
+        return "New Chat"
+
+    q_lower = q.lower()
+
+    # 1. Direct topic/intent mappings for official DPM-101 course inquiries
+    if re.search(r"\b(passing (requirement|requirements|criteria|score|marks)|pass(ing)? the course|pass criteria)\b", q_lower):
+        return "Passing Requirements"
+    if re.search(r"\b(distinction|pass with distinction)\b", q_lower):
+        return "Pass with Distinction"
+    if re.search(r"\b(when is (the )?final exam|final exam (date|schedule|timing|time|slot)|exam schedule)\b", q_lower):
+        return "Final Exam Schedule"
+    if re.search(r"\b(final exam (rules|guidelines|instructions)|proctored (final )?exam|exam rules)\b", q_lower):
+        return "Final Exam Rules"
+    if re.search(r"\b(capstone (deadline|due)|deadline for capstone|when is (the )?capstone)\b", q_lower):
+        return "Capstone Deadline"
+    if re.search(r"\b(capstone (submission|extension|late)|submit capstone)\b", q_lower):
+        return "Capstone Submission"
+    if re.search(r"\b(quiz|quizzes)\b.*\b(deadline|deadlines|due|timing|schedule)\b|\b(deadline|deadlines|due)\b.*\b(quiz|quizzes)\b", q_lower):
+        return "Quiz Deadlines"
+    if re.search(r"\b(quiz|quizzes|weekly quizzes)\b", q_lower):
+        return "Weekly Quizzes"
+    if re.search(r"\b(certificate fee|cost of certificate|verified certificate fee)\b", q_lower):
+        return "Certificate Fee"
+    if re.search(r"\b(certificate|verified track|verified certificate)\b", q_lower):
+        return "Verified Certificate"
+    if re.search(r"\b(refund|money back|fee refund)\b", q_lower):
+        return "Refund Policy"
+    if re.search(r"\b(grading (policy|scheme|breakdown|weightage)|grade calculation)\b", q_lower):
+        return "Grading Policy"
+    if re.search(r"\b(course duration|how long is the course|course schedule|weekly schedule)\b", q_lower):
+        return "Course Schedule"
+    if re.search(r"\b(calculator|rough paper|scratch paper)\b", q_lower):
+        return "Exam Materials"
+    if re.search(r"\b(laptop|desktop|webcam|microphone|browser|chrome|edge)\b", q_lower):
+        return "Technical Requirements"
+
+    # 2. General extraction fallback: strip question prefixes
+    cleaned = re.sub(
+        r"^(what (is|are|about) (the|a|an)?|when (is|are) (the|a|an)?|where (is|are) (the|a|an)?|how (do|does|can) (i|we)?|can (i|we)?|is (there|it) (a|an|the)?|tell me about|please explain|could you tell me)\s+",
+        "",
+        q,
+        flags=re.IGNORECASE,
+    )
+    cleaned = cleaned.strip("? .!\t\r\n")
+    if not cleaned:
+        cleaned = q.strip("? .!\t\r\n")
+
+    words = cleaned.split()
+    if not words:
+        return "New Chat"
+
+    # Limit to max 4 words for concise title
+    if len(words) > 4:
+        words = words[:4]
+
+    title = " ".join(w.capitalize() if not w.isupper() else w for w in words)
+    if len(title) > 30:
+        title = title[:27].rstrip() + "..."
+    return title
 
 
 # ── Context Resolution Helper ─────────────────────────────────────────────────
@@ -163,21 +244,23 @@ class ChatService:
 
     # ── Conversation Lifecycle ────────────────────────────────────────────────
 
-    def create_conversation(self) -> dict[str, Any]:
+    def create_conversation(self, title: Optional[str] = None) -> dict[str, Any]:
         """
         Create a new conversation record with status='active'.
         """
         conv_id = str(uuid.uuid4())
         now_iso = datetime.now(timezone.utc).isoformat()
+        conv_title = title or "New Chat"
         conn = self._get_connection()
         try:
             with immediate_transaction(conn):
                 conn.execute(
-                    "INSERT INTO conversations (id, created_at, updated_at, status) VALUES (?, ?, ?, 'active');",
-                    (conv_id, now_iso, now_iso),
+                    "INSERT INTO conversations (id, title, created_at, updated_at, status) VALUES (?, ?, ?, ?, 'active');",
+                    (conv_id, conv_title, now_iso, now_iso),
                 )
             return {
                 "id": conv_id,
+                "title": conv_title,
                 "created_at": now_iso,
                 "updated_at": now_iso,
                 "status": "active",
@@ -191,6 +274,7 @@ class ChatService:
         """
         Retrieve conversation metadata by ID.
         Returns None if non-existent or deleted (unless include_deleted=True).
+        Backfills meaningful title from first user message if title is missing.
         """
         if not conversation_id or not isinstance(conversation_id, str):
             return None
@@ -198,21 +282,36 @@ class ChatService:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if include_deleted:
-                cursor.execute(
-                    "SELECT id, created_at, updated_at, status FROM conversations WHERE id = ?;",
-                    (conversation_id,),
-                )
-            else:
-                cursor.execute(
-                    "SELECT id, created_at, updated_at, status FROM conversations WHERE id = ? AND status = 'active';",
-                    (conversation_id,),
-                )
+            status_clause = "" if include_deleted else " AND status = 'active'"
+            cursor.execute(
+                f"""
+                SELECT id, title, created_at, updated_at, status,
+                       (SELECT content FROM messages WHERE conversation_id = conversations.id AND role = 'user' ORDER BY created_at ASC LIMIT 1) AS first_message
+                FROM conversations
+                WHERE id = ?{status_clause};
+                """,
+                (conversation_id,),
+            )
             row = cursor.fetchone()
             if not row:
                 return None
+
+            title = row["title"]
+            if not title or title == "New Chat":
+                first_msg = row["first_message"]
+                if first_msg:
+                    title = generate_conversation_title(first_msg)
+                    try:
+                        with immediate_transaction(conn):
+                            conn.execute("UPDATE conversations SET title = ? WHERE id = ?;", (title, row["id"]))
+                    except Exception:
+                        pass
+                else:
+                    title = "New Chat"
+
             return {
                 "id": row["id"],
+                "title": title,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "status": row["status"],
@@ -225,30 +324,52 @@ class ChatService:
     ) -> list[dict[str, Any]]:
         """
         List conversations ordered by most recently updated.
+        Backfills meaningful title from first user message if title is missing.
         """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if include_deleted:
-                cursor.execute(
-                    "SELECT id, created_at, updated_at, status FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?;",
-                    (limit, offset),
-                )
-            else:
-                cursor.execute(
-                    "SELECT id, created_at, updated_at, status FROM conversations WHERE status = 'active' ORDER BY updated_at DESC LIMIT ? OFFSET ?;",
-                    (limit, offset),
-                )
+            status_clause = "" if include_deleted else "WHERE status = 'active'"
+            cursor.execute(
+                f"""
+                SELECT id, title, created_at, updated_at, status,
+                       (SELECT content FROM messages WHERE conversation_id = conversations.id AND role = 'user' ORDER BY created_at ASC LIMIT 1) AS first_message
+                FROM conversations
+                {status_clause}
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (limit, offset),
+            )
             rows = cursor.fetchall()
-            return [
-                {
+            results = []
+            backfills = []
+            for row in rows:
+                title = row["title"]
+                first_msg = row["first_message"]
+                if not title or title == "New Chat":
+                    if first_msg:
+                        title = generate_conversation_title(first_msg)
+                        backfills.append((title, row["id"]))
+                    else:
+                        title = "New Chat"
+
+                results.append({
                     "id": row["id"],
+                    "title": title,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "status": row["status"],
-                }
-                for row in rows
-            ]
+                })
+
+            if backfills:
+                try:
+                    with immediate_transaction(conn):
+                        cursor.executemany("UPDATE conversations SET title = ? WHERE id = ?;", backfills)
+                except Exception:
+                    pass
+
+            return results
         finally:
             conn.close()
 
@@ -353,10 +474,21 @@ class ChatService:
                 if cursor.rowcount == 0:
                     raise ValueError("Conversation not found or has been deleted")
 
-                cursor.execute(
-                    "UPDATE conversations SET updated_at = ? WHERE id = ? AND status = 'active';",
-                    (now_iso, conversation_id),
-                )
+                # Check if conversation needs a title generated from this first user message
+                cursor.execute("SELECT title FROM conversations WHERE id = ?;", (conversation_id,))
+                conv_row = cursor.fetchone()
+                current_title = conv_row["title"] if conv_row else None
+                if not current_title or current_title == "New Chat":
+                    new_title = generate_conversation_title(content)
+                    cursor.execute(
+                        "UPDATE conversations SET updated_at = ?, title = ? WHERE id = ? AND status = 'active';",
+                        (now_iso, new_title, conversation_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE id = ? AND status = 'active';",
+                        (now_iso, conversation_id),
+                    )
             return {
                 "id": msg_id,
                 "conversation_id": conversation_id,
