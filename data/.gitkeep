@@ -1,0 +1,5 @@
+# data/ — runtime SQLite database directory
+#
+# This file exists only to keep the empty directory tracked by Git.
+# The actual database file (chatbot.db) is listed in .gitignore and
+# is rebuilt from PDF documents every time the application starts.

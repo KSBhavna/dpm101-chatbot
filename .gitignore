@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — DPM-101 Helpdesk Chatbot
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+*.env.local
+
+# ── Python virtual environment ────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Python bytecode ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# ── SQLite database (runtime data, not committed) ─────────────────────────────
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ── macOS / Windows system files ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log

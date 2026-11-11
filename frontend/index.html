@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="IIMBx DPM-101 Digital Product Management Course Helpdesk Chatbot. Grounded in official course documents." />
+  <title>IIMBx DPM-101 Course Helpdesk</title>
+  
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="/css/main.css" />
+  <link rel="stylesheet" href="/css/chat.css" />
+</head>
+<body>
+  <!-- Header / Top Navigation -->
+  <header class="app-header" role="banner">
+    <div class="header-brand">
+      <button id="btn-toggle-sidebar" class="btn-icon mobile-only" aria-label="Toggle conversation history" title="Toggle history">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+      <div class="brand-logo" aria-hidden="true">
+        <span class="logo-badge">IIMBx</span>
+      </div>
+      <div class="brand-titles">
+        <h1 class="brand-title">DPM-101 Course Helpdesk</h1>
+        <span class="brand-subtitle">Digital Product Management</span>
+      </div>
+    </div>
+
+    <div class="header-status">
+      <span id="status-indicator" class="status-indicator status-online" title="Backend service status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-text" id="status-text">Helpdesk Active</span>
+      </span>
+    </div>
+
+    <div class="header-actions">
+      <button id="btn-open-stats" class="btn btn-secondary btn-sm" aria-label="Open operational statistics" title="View live system counters">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="18" y1="20" x2="18" y2="10"></line>
+          <line x1="12" y1="20" x2="12" y2="4"></line>
+          <line x1="6" y1="20" x2="6" y2="14"></line>
+        </svg>
+        <span>Live Stats</span>
+      </button>
+      <button id="btn-header-new-chat" class="btn btn-primary btn-sm" aria-label="Start a new chat conversation" title="Start new conversation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span class="btn-text-desktop">New Chat</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Application Layout -->
+  <div class="app-layout">
+    <!-- Collapsible Sidebar: Conversation History -->
+    <aside class="sidebar" id="sidebar" aria-label="Conversation History">
+      <div class="sidebar-header">
+        <button id="btn-sidebar-new-chat" class="btn btn-primary btn-block" aria-label="Start new conversation">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>New Conversation</span>
+        </button>
+      </div>
+
+      <div class="sidebar-content">
+        <div class="sidebar-section-header">
+          <span class="sidebar-section-title">Recent Conversations</span>
+        </div>
+        <ul class="conversation-list" id="conversation-list" role="list" aria-label="List of past conversations">
+          <!-- Populated dynamically via JS -->
+          <li class="conversation-item-empty" id="empty-conversations-msg">
+            <span>No conversations yet.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-doc-info">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          <span>Official Documents: 4 Authoritative Sources</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Workspace -->
+    <main class="chat-main" id="chat-main" role="main">
+      <!-- Alert / Banner Region -->
+      <div id="alert-container" class="alert-container" aria-live="assertive">
+        <!-- Rate limit countdown banner -->
+        <div id="rate-limit-banner" class="alert-banner alert-warning" role="alert" style="display: none;">
+          <div class="alert-icon" aria-hidden="true">⏳</div>
+          <div class="alert-content">
+            <strong>Rate Limit Active</strong>
+            <p id="rate-limit-message">Please wait <span id="rate-limit-seconds">15</span>s before sending another message.</p>
+          </div>
+        </div>
+
+        <!-- Conversation 404 Recovery Banner -->
+        <div id="recovery-banner" class="alert-banner alert-warning" role="alert" style="display: none;">
+          <div class="alert-icon" aria-hidden="true">⚠️</div>
+          <div class="alert-content">
+            <strong>Conversation Unavailable</strong>
+            <p>This conversation is no longer active on the server. Your unsent message has been preserved in the composer.</p>
+          </div>
+          <div class="alert-actions">
+            <button type="button" id="btn-recovery-new-chat" class="btn btn-secondary btn-sm">Start New Chat</button>
+          </div>
+        </div>
+
+        <!-- Generic error toast/banner -->
+        <div id="general-error-banner" class="alert-banner alert-danger" role="alert" style="display: none;">
+          <div class="alert-icon" aria-hidden="true">❌</div>
+          <div class="alert-content">
+            <strong id="general-error-title">Error</strong>
+            <p id="general-error-text">An error occurred.</p>
+          </div>
+          <button type="button" id="btn-dismiss-error" class="btn-icon btn-sm" aria-label="Dismiss error">✕</button>
+        </div>
+      </div>
+
+      <!-- Scrollable Message Feed -->
+      <section class="message-feed" id="message-feed" role="log" aria-live="polite" aria-label="Conversation messages">
+        <!-- Welcome View (Displayed when conversation is empty) -->
+        <div id="welcome-view" class="welcome-view">
+          <div class="welcome-badge" aria-hidden="true">🎓</div>
+          <h2 class="welcome-heading">Welcome to the DPM-101 Course Helpdesk</h2>
+          <p class="welcome-subtext">
+            Get instant, grounded answers on grading criteria, late submission penalties, capstone deadlines, and proctored exam logistics. All answers are derived strictly from official IIMBx course documents.
+          </p>
+
+          <div class="suggested-questions-card">
+            <div class="suggested-header">
+              <span class="suggested-title">Frequently Asked Questions</span>
+            </div>
+            <div class="suggested-grid">
+              <button type="button" class="suggested-chip" data-question="What are the passing criteria for DPM-101?">
+                <span class="chip-icon">📊</span>
+                <span class="chip-text">What are the passing criteria for DPM-101?</span>
+              </button>
+              <button type="button" class="suggested-chip" data-question="When is the proctored final exam and what are the device rules?">
+                <span class="chip-icon">📝</span>
+                <span class="chip-text">When is the proctored final exam and what are the device rules?</span>
+              </button>
+              <button type="button" class="suggested-chip" data-question="What is the deadline for the Capstone Product Case?">
+                <span class="chip-icon">📅</span>
+                <span class="chip-text">What is the deadline for the Capstone Product Case?</span>
+              </button>
+              <button type="button" class="suggested-chip" data-question="What is the penalty for late submission of assignments?">
+                <span class="chip-icon">⏱️</span>
+                <span class="chip-text">What is the penalty for late submission of assignments?</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dynamic Message Bubbles are appended here -->
+        <div id="messages-container" class="messages-container"></div>
+
+        <!-- Typing / Loading Indicator -->
+        <div id="typing-indicator" class="message-row message-assistant typing-row" style="display: none;" aria-live="polite" aria-label="Assistant is researching course documents">
+          <div class="avatar avatar-assistant" aria-hidden="true">🤖</div>
+          <div class="message-bubble bubble-assistant typing-bubble">
+            <div class="typing-dots" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <span class="typing-label">Consulting course documents...</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Message Composer Footer -->
+      <footer class="chat-footer">
+        <form class="composer-form" id="composer-form" autocomplete="off">
+          <div class="composer-input-wrapper">
+            <textarea
+              id="message-input"
+              class="composer-input"
+              placeholder="Ask a question about DPM-101... (Shift+Enter for newline, Enter to send)"
+              rows="1"
+              maxlength="4000"
+              aria-label="Your question about DPM-101"
+              aria-describedby="char-counter"
+            ></textarea>
+            <div class="composer-meta">
+              <span class="char-counter" id="char-counter" aria-live="off">0 / 4000</span>
+            </div>
+          </div>
+          <button type="submit" id="btn-send" class="btn btn-primary btn-send" aria-label="Send message" title="Send message">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+            <span class="btn-text-desktop">Send</span>
+          </button>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Operational Statistics Modal (<dialog>) -->
+  <dialog id="stats-dialog" class="stats-dialog" aria-labelledby="stats-dialog-title" aria-modal="true">
+    <div class="stats-card">
+      <div class="stats-header">
+        <div class="stats-title-group">
+          <h2 id="stats-dialog-title" class="stats-title">Live Operational Statistics</h2>
+          <span class="stats-subtitle">In-Process Runtime Metrics (GET /api/stats)</span>
+        </div>
+        <button type="button" id="btn-close-stats" class="btn-icon" aria-label="Close statistics dialog">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="stats-body">
+        <div id="stats-loading-state" class="stats-loading" style="display: none;">
+          <div class="spinner" aria-hidden="true"></div>
+          <span>Loading live statistics...</span>
+        </div>
+
+        <div id="stats-error-state" class="stats-error alert-banner alert-danger" style="display: none;" role="alert">
+          <span class="alert-icon">⚠️</span>
+          <div class="alert-content">
+            <strong>Statistics Unavailable</strong>
+            <p id="stats-error-text">Failed to retrieve operational counters from the server.</p>
+          </div>
+        </div>
+
+        <div id="stats-content" class="stats-content">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="stat-label">Total Requests</span>
+              <span class="stat-value" id="stat-total-requests">--</span>
+              <span class="stat-help">Valid chat message queries processed</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Cache Hits</span>
+              <span class="stat-value stat-success" id="stat-cache-hits">--</span>
+              <span class="stat-help">Queries served instantly from SQLite cache</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Gemini AI Calls</span>
+              <span class="stat-value stat-accent" id="stat-gemini-calls">--</span>
+              <span class="stat-help">Actual model text generation invocations</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">System Errors</span>
+              <span class="stat-value stat-danger" id="stat-errors">--</span>
+              <span class="stat-help">Model failures or 500 exceptions</span>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <span class="stat-label">Process Uptime</span>
+              <span class="stat-value stat-uptime" id="stat-uptime">--</span>
+              <span class="stat-help" id="stat-uptime-seconds">0 seconds</span>
+            </div>
+          </div>
+
+          <div class="stats-note-card">
+            <span class="note-heading">Worker Lifecycle Note:</span>
+            <p class="note-text" id="stat-worker-note">
+              Counters reflect the current worker process only. Reset on restart.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-footer">
+        <span class="stats-poll-indicator">
+          <span class="poll-dot" aria-hidden="true"></span>
+          <span>Auto-refreshes every 30s while open</span>
+        </span>
+        <button type="button" id="btn-refresh-stats" class="btn btn-secondary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          <span>Refresh Now</span>
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Delete Confirmation Modal (<dialog>) -->
+  <dialog id="delete-dialog" class="confirm-dialog" aria-labelledby="delete-dialog-title" aria-modal="true">
+    <div class="confirm-card">
+      <h3 id="delete-dialog-title" class="confirm-title">Delete Conversation</h3>
+      <p class="confirm-text">Are you sure you want to delete this conversation? This will purge its message history permanently from the server.</p>
+      <div class="confirm-actions">
+        <button type="button" id="btn-cancel-delete" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="btn-confirm-delete" class="btn btn-danger">Delete</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Scripts: Modular Vanilla JavaScript Architecture -->
+  <script src="/js/storage.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# ─────────────────────────────────────────────
+# DPM-101 Helpdesk Chatbot — Python dependencies
+# Module 2: Environment & Repository Setup
+# Module 3: Course Document Management (pdfplumber, fpdf2 added)
+# ─────────────────────────────────────────────
+
+# Web framework
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+
+# Environment variable management
+python-dotenv==1.0.1
+
+# Google Gemini AI — official SDK (NOT google-generativeai)
+# Version pinned after Module 4 testing against live API
+google-genai==3.0.0
+
+# PDF extraction — Module 3
+pdfplumber==0.11.4
+
+# Testing
+pytest==8.3.2
+pytest-flask==1.3.0
+fpdf2==2.8.1          # test fixture PDF creation only; never used in production code
+reportlab==5.1.0      # test fixture PDF creation fallback
